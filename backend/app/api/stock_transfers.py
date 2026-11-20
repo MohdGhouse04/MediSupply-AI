@@ -7,6 +7,10 @@ from sqlalchemy.orm import Session
 
 from backend.app.database.connection import get_db
 
+from backend.app.services.transfer_recommendation_service import (
+    get_transfer_recommendations
+)
+
 from backend.app.models import (
     StockTransfer,
     Facility,
@@ -552,3 +556,36 @@ def receive_stock_transfer(
     except Exception:
         db.rollback()
         raise
+# --------------------------------------------------
+# AI-BASED STOCK TRANSFER RECOMMENDATIONS
+# --------------------------------------------------
+
+@router.get("/recommendations")
+def read_transfer_recommendations(
+    safety_days: int = Query(
+        default=3,
+        ge=0,
+        le=30
+    ),
+    db: Session = Depends(get_db)
+):
+
+    try:
+
+        recommendations = get_transfer_recommendations(
+            db,
+            safety_days=safety_days
+        )
+
+        return {
+            "total_recommendations": len(recommendations),
+            "safety_days": safety_days,
+            "recommendations": recommendations
+        }
+
+    except (FileNotFoundError, ValueError) as exc:
+
+        raise HTTPException(
+            status_code=503,
+            detail=str(exc)
+        )
