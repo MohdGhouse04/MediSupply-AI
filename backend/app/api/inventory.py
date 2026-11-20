@@ -266,6 +266,8 @@ def get_low_stock_inventory(
     return [dict(row) for row in results]
 
 # Detect medicine batches approaching expiry
+
+# Detect medicine batches approaching expiry and estimate wastage exposure
 @router.get("/expiry-risk")
 def get_expiry_risk(
     days: int = Query(default=90, ge=1),
@@ -273,7 +275,6 @@ def get_expiry_risk(
 ):
 
     today = date.today()
-
     expiry_limit = today + timedelta(days=days)
 
     statement = (
@@ -286,6 +287,7 @@ def get_expiry_risk(
             MedicineBatch.batch_id,
             MedicineBatch.batch_number,
             MedicineBatch.expires_on,
+            MedicineBatch.unit_cost,
             func.sum(
                 calculate_usable_stock()
             ).label("usable_stock")
@@ -316,20 +318,96 @@ def get_expiry_risk(
             Medicine.strength,
             MedicineBatch.batch_id,
             MedicineBatch.batch_number,
-            MedicineBatch.expires_on
+            MedicineBatch.expires_on,
+            MedicineBatch.unit_cost
         )
         .having(
             func.sum(calculate_usable_stock()) > 0
         )
-        .order_by(MedicineBatch.expires_on)
+        .order_by(
+            MedicineBatch.expires_on.asc()
+        )
     )
 
     results = db.execute(statement).mappings().all()
 
-    return [
-        {
-            **dict(row),
-            "days_to_expiry": (row["expires_on"] - today).days
-        }
-        for row in results
-    ]
+    expiry_records = []
+
+    for row in results:
+
+        days_to_expiry = (
+            row["expires_on"] - today
+        ).days
+
+        if days_to_expiry <= 30:
+            risk_level = "CRITICAL"
+
+        elif days_to_expiry <= 60:
+            risk_level = "HIGH"
+
+        else:
+            risk_level = "MEDIUM"
+
+        usable_stock = int(row["usable_stock"])
+
+        unit_cost = row["unit_cost"]
+
+        if unit_cost is not None:
+            estimated_value = round(
+                float(unit_cost) * usable_stock,
+                2
+            )
+        else:
+            estimated_value = None
+
+        expiry_records.append(
+            {
+                "facility_id": row["facility_id"],
+                "facility_name": row["facility_name"],
+                "medicine_id": row["medicine_id"],
+                "generic_name": row["generic_name"],
+                "strength": row["strength"],
+                "batch_id": row["batch_id"],
+                "batch_number": row["batch_number"],
+                "expires_on": row["expires_on"],
+                "days_to_expiry": days_to_expiry,
+                "usable_stock": usable_stock,
+                "unit_cost": (
+                    float(unit_cost)
+                    if unit_cost is not None
+                    else None
+                ),
+                "estimated_value_at_risk": estimated_value,
+                "risk_level": risk_level
+            }
+        )
+
+    return {
+        "total_batches_at_risk": len(expiry_records),
+        "total_usable_units_at_risk": sum(
+            item["usable_stock"]
+            for item in expiry_records
+        ),
+        "total_estimated_value_at_risk": round(
+            sum(
+                item["estimated_value_at_risk"] or 0
+                for item in expiry_records
+            ),
+            2
+        ),
+        "risk_breakdown": {
+            "critical": sum(
+                1 for item in expiry_records
+                if item["risk_level"] == "CRITICAL"
+            ),
+            "high": sum(
+                1 for item in expiry_records
+                if item["risk_level"] == "HIGH"
+            ),
+            "medium": sum(
+                1 for item in expiry_records
+                if item["risk_level"] == "MEDIUM"
+            )
+        },
+        "records": expiry_records
+    }

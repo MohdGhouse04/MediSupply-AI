@@ -1,0 +1,4 @@
+Model,MAE,RMSE,WAPE
+Lag-7 Baseline,4.739,6.628,34.31
+Random Forest,3.647,5.234,26.4
+HistGradientBoosting,3.543,5.165,25.65
