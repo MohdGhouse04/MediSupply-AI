@@ -10,6 +10,8 @@ from backend.app.api.medicine_batches import router as batch_router
 from backend.app.api.stockout_alerts import router as stockout_alerts_router
 from backend.app.api.fefo import router as fefo_router
 from backend.app.api.expiry_management import router as expiry_management_router
+from backend.app.api.stock_transfers import router as stock_transfers_router
+from backend.app.api.stock_transfers import router as stock_transfers_router
 
 app = FastAPI(
     title="MediSupply AI",
@@ -27,6 +29,8 @@ app.include_router(batch_router)
 app.include_router(stockout_alerts_router)
 app.include_router(fefo_router)
 app.include_router(expiry_management_router)
+app.include_router(stock_transfers_router)
+app.include_router(stock_transfers_router)
 
 
 @app.get("/")
