@@ -1,25 +1,24 @@
 import logging
 
 from kafka import KafkaConsumer
-
 from sqlalchemy.dialects.postgresql import insert
 
+from backend.app.core.config import settings
 from backend.app.database.connection import SessionLocal
 from backend.app.models.processed_event import ProcessedEvent
+from backend.app.services.kafka_message_handler import handle_kafka_message
 
-from backend.app.services.kafka_message_handler import (
-    handle_kafka_message
-)
 
 logger = logging.getLogger(__name__)
 
-KAFKA_BOOTSTRAP_SERVERS = ["localhost:9092"]
+KAFKA_BOOTSTRAP_SERVERS = [
+    server.strip()
+    for server in settings.KAFKA_BOOTSTRAP_SERVERS.split(",")
+    if server.strip()
+]
 
 
-def process_inventory_event(
-    event: dict,
-    topic: str = "inventory-events"
-) -> bool:
+def process_inventory_event(event: dict, topic: str = "inventory-events") -> bool:
 
     if not isinstance(event, dict):
         raise ValueError("Event must be a dictionary")
@@ -33,12 +32,7 @@ def process_inventory_event(
     if not isinstance(event_type, str) or not event_type.startswith("INVENTORY_"):
         raise ValueError("Invalid inventory event type")
 
-    required_fields = [
-        "facility_id",
-        "medicine_id",
-        "batch_id",
-        "quantity"
-    ]
+    required_fields = ["facility_id", "medicine_id", "batch_id", "quantity"]
 
     for field in required_fields:
         if event.get(field) is None:
@@ -62,25 +56,16 @@ def process_inventory_event(
                 topic=topic,
                 event_type=event_type
             )
-            .on_conflict_do_nothing(
-                index_elements=["event_id"]
-            )
+            .on_conflict_do_nothing(index_elements=["event_id"])
             .returning(ProcessedEvent.event_id)
         )
 
         result = db.execute(statement).scalar_one_or_none()
 
         if result is None:
-
             db.rollback()
-
-            logger.info(
-                "Duplicate inventory event skipped: %s",
-                event_id
-            )
-
+            logger.info("Duplicate inventory event skipped: %s", event_id)
             print("Duplicate event skipped:", event_id)
-
             return False
 
         db.commit()
@@ -112,9 +97,7 @@ def consume_inventory_events(max_messages=None):
         enable_auto_commit=False,
         max_poll_records=1,
         value_deserializer=None,
-        key_deserializer=lambda key: (
-            key.decode("utf-8") if key else None
-        )
+        key_deserializer=lambda key: key.decode("utf-8") if key else None
     )
 
     processed = 0

@@ -1,21 +1,25 @@
-
 import json
 import logging
 
-from kafka import KafkaProducer, KafkaConsumer
+from kafka import KafkaProducer
 from kafka.errors import KafkaError
+
+from backend.app.core.config import settings
+
 
 logger = logging.getLogger(__name__)
 
-KAFKA_BOOTSTRAP_SERVERS = ["localhost:9092"]
+KAFKA_BOOTSTRAP_SERVERS = [
+    server.strip()
+    for server in settings.KAFKA_BOOTSTRAP_SERVERS.split(",")
+    if server.strip()
+]
 
 
 def create_kafka_producer():
     return KafkaProducer(
         bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
-        value_serializer=lambda value: json.dumps(
-            value, default=str
-        ).encode("utf-8"),
+        value_serializer=lambda value: json.dumps(value, default=str).encode("utf-8"),
         key_serializer=lambda key: key.encode("utf-8") if key else None,
         acks="all",
         retries=5,
@@ -27,12 +31,7 @@ def publish_event(topic: str, event: dict, key: str | None = None):
     producer = create_kafka_producer()
 
     try:
-        future = producer.send(
-            topic,
-            key=key,
-            value=event
-        )
-
+        future = producer.send(topic, key=key, value=event)
         result = future.get(timeout=10)
 
         logger.info(
@@ -54,6 +53,7 @@ def publish_event(topic: str, event: dict, key: str | None = None):
 
     finally:
         producer.close()
+
 
 def publish_dead_letter_event(
     original_topic: str,

@@ -1,0 +1,13 @@
+.venv
+__pycache__
+*.py[cod]
+.pytest_cache
+.git
+.env
+.DS_Store
+backups
+data
+notebooks
+frontend
+ml
+docs

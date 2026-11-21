@@ -1,6 +1,8 @@
 
 import json
 import logging
+
+from backend.app.core.config import settings
 import time
 
 from kafka import KafkaConsumer, TopicPartition
@@ -20,7 +22,11 @@ from backend.app.services.kafka_service import (
 
 logger = logging.getLogger(__name__)
 
-KAFKA_BOOTSTRAP_SERVERS = ["localhost:9092"]
+KAFKA_BOOTSTRAP_SERVERS = [
+    server.strip()
+    for server in settings.KAFKA_BOOTSTRAP_SERVERS.split(",")
+    if server.strip()
+]
 
 MAX_RETRIES = 3
 RETRY_DELAY_SECONDS = 2
