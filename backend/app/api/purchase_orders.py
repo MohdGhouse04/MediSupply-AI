@@ -1,7 +1,6 @@
 
 from datetime import datetime, date
 from decimal import Decimal
-import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -25,39 +24,13 @@ from backend.app.schemas.purchase_order import (
     PurchaseOrderReceive
 )
 
-from backend.app.services.kafka_service import publish_event
+from backend.app.services.outbox_service import add_outbox_event
 
 
 router = APIRouter(
     prefix="/purchase-orders",
     tags=["Purchase Orders"]
 )
-
-logger = logging.getLogger(__name__)
-
-
-# --------------------------------------------------
-# KAFKA EVENT PUBLISHER
-# --------------------------------------------------
-
-def publish_purchase_order_event(event: dict, purchase_order_id: int):
-    try:
-        result = publish_event(
-            topic="purchase-order-events",
-            event=event,
-            key=f"purchase-order-{purchase_order_id}"
-        )
-
-        logger.info(
-            "Purchase order Kafka event published: %s",
-            result
-        )
-
-    except Exception:
-        logger.exception(
-            "Failed to publish purchase order Kafka event: PO-%s",
-            purchase_order_id
-        )
 
 
 # --------------------------------------------------
@@ -142,9 +115,6 @@ def create_purchase_order(
 
             db.add(order_item)
 
-        db.commit()
-        db.refresh(purchase_order)
-
         event = {
             "event_id": f"PO-{purchase_order.purchase_order_id}-CREATED",
             "event_type": "PURCHASE_ORDER_CREATED",
@@ -161,10 +131,14 @@ def create_purchase_order(
             "event_timestamp": datetime.now().isoformat()
         }
 
-        publish_purchase_order_event(
+        add_outbox_event(
+            db,
             event,
-            purchase_order.purchase_order_id
+            topic="purchase-order-events"
         )
+
+        db.commit()
+        db.refresh(purchase_order)
 
         return {
             "message": "Purchase order created successfully",
@@ -174,7 +148,6 @@ def create_purchase_order(
         }
 
     except Exception:
-
         db.rollback()
         raise
 
@@ -324,9 +297,6 @@ def update_purchase_order_status(
 
     try:
 
-        db.commit()
-        db.refresh(purchase_order)
-
         event = {
             "event_id": (
                 f"PO-{purchase_order_id}-STATUS-{new_status}"
@@ -340,10 +310,14 @@ def update_purchase_order_status(
             "event_timestamp": datetime.now().isoformat()
         }
 
-        publish_purchase_order_event(
+        add_outbox_event(
+            db,
             event,
-            purchase_order_id
+            topic="purchase-order-events"
         )
+
+        db.commit()
+        db.refresh(purchase_order)
 
         return {
             "message": "Purchase order status updated",
@@ -353,7 +327,6 @@ def update_purchase_order_status(
         }
 
     except Exception:
-
         db.rollback()
         raise
 
@@ -566,8 +539,6 @@ def receive_purchase_order(
 
         final_status = purchase_order.status
 
-        db.commit()
-
         event = {
             "event_id": (
                 f"PO-{purchase_order_id}-RECEIPT-"
@@ -586,10 +557,13 @@ def receive_purchase_order(
             "event_timestamp": datetime.now().isoformat()
         }
 
-        publish_purchase_order_event(
+        add_outbox_event(
+            db,
             event,
-            purchase_order_id
+            topic="purchase-order-events"
         )
+
+        db.commit()
 
         return {
             "message": "Goods received successfully",

@@ -9,3 +9,5 @@ from backend.app.models.purchase_order import (
     PurchaseOrder,
     PurchaseOrderItem
 )
+from backend.app.models.outbox_event import OutboxEvent
+from backend.app.models.processed_event import ProcessedEvent

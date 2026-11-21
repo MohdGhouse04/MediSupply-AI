@@ -1,29 +1,34 @@
-
-import json
 import logging
-import time
 
-from kafka import KafkaConsumer, TopicPartition
-from kafka.structs import OffsetAndMetadata
+from kafka import KafkaConsumer
 
-from backend.app.services.kafka_service import (
-    publish_dead_letter_event
+from sqlalchemy.dialects.postgresql import insert
+
+from backend.app.database.connection import SessionLocal
+from backend.app.models.processed_event import ProcessedEvent
+
+from backend.app.services.kafka_message_handler import (
+    handle_kafka_message
 )
 
 logger = logging.getLogger(__name__)
 
 KAFKA_BOOTSTRAP_SERVERS = ["localhost:9092"]
 
-MAX_RETRIES = 3
-RETRY_DELAY_SECONDS = 2
 
-
-def process_inventory_event(event: dict) -> bool:
+def process_inventory_event(
+    event: dict,
+    topic: str = "inventory-events"
+) -> bool:
 
     if not isinstance(event, dict):
         raise ValueError("Event must be a dictionary")
 
+    event_id = event.get("event_id")
     event_type = event.get("event_type")
+
+    if not isinstance(event_id, str) or not event_id.strip():
+        raise ValueError("Missing or invalid event_id")
 
     if not isinstance(event_type, str) or not event_type.startswith("INVENTORY_"):
         raise ValueError("Invalid inventory event type")
@@ -39,17 +44,62 @@ def process_inventory_event(event: dict) -> bool:
         if event.get(field) is None:
             raise ValueError(f"Missing required field: {field}")
 
-    if not isinstance(event["quantity"], (int, float)) or event["quantity"] <= 0:
+    if (
+        not isinstance(event["quantity"], (int, float))
+        or isinstance(event["quantity"], bool)
+        or event["quantity"] <= 0
+    ):
         raise ValueError("Invalid inventory event quantity")
 
-    print(
-        f"Processed event: {event_type} | "
-        f"Facility: {event['facility_id']} | "
-        f"Medicine: {event['medicine_id']} | "
-        f"Quantity: {event['quantity']}"
-    )
+    db = SessionLocal()
 
-    return True
+    try:
+
+        statement = (
+            insert(ProcessedEvent)
+            .values(
+                event_id=event_id,
+                topic=topic,
+                event_type=event_type
+            )
+            .on_conflict_do_nothing(
+                index_elements=["event_id"]
+            )
+            .returning(ProcessedEvent.event_id)
+        )
+
+        result = db.execute(statement).scalar_one_or_none()
+
+        if result is None:
+
+            db.rollback()
+
+            logger.info(
+                "Duplicate inventory event skipped: %s",
+                event_id
+            )
+
+            print("Duplicate event skipped:", event_id)
+
+            return False
+
+        db.commit()
+
+        print(
+            f"Processed event: {event_type} | "
+            f"Facility: {event['facility_id']} | "
+            f"Medicine: {event['medicine_id']} | "
+            f"Quantity: {event['quantity']}"
+        )
+
+        return True
+
+    except Exception:
+        db.rollback()
+        raise
+
+    finally:
+        db.close()
 
 
 def consume_inventory_events(max_messages=None):
@@ -70,77 +120,24 @@ def consume_inventory_events(max_messages=None):
     processed = 0
 
     try:
+
         print("Listening for inventory events...")
 
         for message in consumer:
 
-            try:
-                event = json.loads(message.value.decode("utf-8"))
+            success = handle_kafka_message(
+                consumer=consumer,
+                message=message,
+                processor=process_inventory_event,
+                stream_name="Inventory"
+            )
 
-                success = False
-                last_error = None
+            if not success:
+                break
 
-                for attempt in range(1, MAX_RETRIES + 1):
+            processed += 1
 
-                    try:
-                        process_inventory_event(event)
-                        success = True
-                        break
-
-                    except Exception as error:
-                        last_error = error
-
-                        logger.warning(
-                            "Inventory event processing failed. "
-                            "Attempt %s/%s: %s",
-                            attempt,
-                            MAX_RETRIES,
-                            error
-                        )
-
-                        if attempt < MAX_RETRIES:
-                            time.sleep(RETRY_DELAY_SECONDS)
-
-                if not success:
-
-                    print("Maximum retries reached. Publishing to DLQ.")
-
-                    publish_dead_letter_event(
-                        original_topic=message.topic,
-                        event=event,
-                        error_message=str(last_error),
-                        retry_count=MAX_RETRIES
-                    )
-
-                    print("Event successfully published to DLQ.")
-
-                partition = TopicPartition(
-                    message.topic,
-                    message.partition
-                )
-
-                consumer.commit({
-                    partition: OffsetAndMetadata(
-                        message.offset + 1,
-                        ""
-                    )
-                })
-
-                processed += 1
-
-                print(
-                    "Partition:", message.partition,
-                    "| Offset:", message.offset
-                )
-
-                if max_messages and processed >= max_messages:
-                    break
-
-            except Exception:
-                logger.exception(
-                    "Failed to process or publish inventory event. "
-                    "Offset not committed."
-                )
+            if max_messages and processed >= max_messages:
                 break
 
     except KeyboardInterrupt:

@@ -7,17 +7,20 @@ from sqlalchemy import select, func, case
 from sqlalchemy.orm import Session
 
 from backend.app.database.connection import get_db
+
 from backend.app.models import (
     Inventory,
     Facility,
     MedicineBatch,
     InventoryTransaction
 )
+
 from backend.app.schemas.inventory_transaction import (
     InventoryTransactionCreate,
     InventoryTransactionResponse
 )
-from backend.app.services.kafka_service import publish_event
+
+from backend.app.services.outbox_service import add_outbox_event
 
 
 logger = logging.getLogger(__name__)
@@ -29,7 +32,7 @@ router = APIRouter(
 
 
 # =========================================================
-# POST: CREATE INVENTORY TRANSACTION + KAFKA EVENT
+# POST: CREATE INVENTORY TRANSACTION + TRANSACTIONAL OUTBOX
 # =========================================================
 
 @router.post(
@@ -172,13 +175,12 @@ def create_inventory_transaction(
 
         db.add(new_transaction)
 
-        # 8. Commit PostgreSQL first
-        db.commit()
-        db.refresh(new_transaction)
+        # Flush to generate transaction ID before creating the event
+        db.flush()
 
-        # 9. Build Kafka event
+        # 8. Build inventory event
         event = {
-            "event_id": new_transaction.transaction_id,
+            "event_id": str(new_transaction.transaction_id),
             "event_type": f"INVENTORY_{transaction.transaction_type}",
             "transaction_id": new_transaction.transaction_id,
             "facility_id": transaction.facility_id,
@@ -195,26 +197,22 @@ def create_inventory_transaction(
             )
         }
 
-        # 10. Publish event after database commit
-        try:
+        # 9. Save event to transactional outbox
+        add_outbox_event(
+            db=db,
+            event=event,
+            topic="inventory-events"
+        )
 
-            result = publish_event(
-                topic="inventory-events",
-                event=event,
-                key=f"facility-{transaction.facility_id}"
-            )
+        # 10. Commit business data and outbox event together
+        db.commit()
 
-            logger.info(
-                "Kafka inventory event published: %s",
-                result
-            )
+        db.refresh(new_transaction)
 
-        except Exception:
-
-            logger.exception(
-                "Inventory transaction %s committed, but Kafka publishing failed",
-                new_transaction.transaction_id
-            )
+        logger.info(
+            "Inventory transaction %s and outbox event committed successfully",
+            new_transaction.transaction_id
+        )
 
         return new_transaction
 
@@ -224,6 +222,7 @@ def create_inventory_transaction(
 
     except Exception:
         db.rollback()
+        logger.exception("Inventory transaction creation failed")
         raise
 
 
@@ -238,53 +237,37 @@ def create_inventory_transaction(
 def get_inventory_transactions(
     facility_id: int | None = Query(default=None, gt=0),
     batch_id: int | None = Query(default=None, gt=0),
-    transaction_type: str | None = None,
+    transaction_type: str | None = Query(default=None),
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=500),
     db: Session = Depends(get_db)
 ):
 
-    query = select(InventoryTransaction)
+    statement = select(InventoryTransaction)
 
     if facility_id is not None:
-        query = query.where(
+        statement = statement.where(
             InventoryTransaction.facility_id == facility_id
         )
 
     if batch_id is not None:
-        query = query.where(
+        statement = statement.where(
             InventoryTransaction.batch_id == batch_id
         )
 
     if transaction_type is not None:
-
-        valid_types = [
-            "RECEIVED",
-            "ISSUED",
-            "DAMAGED",
-            "ADJUSTMENT"
-        ]
-
-        if transaction_type not in valid_types:
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid transaction type"
-            )
-
-        query = query.where(
-            InventoryTransaction.transaction_type == transaction_type
+        statement = statement.where(
+            InventoryTransaction.transaction_type == transaction_type.upper()
         )
 
-    query = (
-        query
-        .order_by(
-            InventoryTransaction.transaction_date.desc()
-        )
+    statement = (
+        statement
+        .order_by(InventoryTransaction.transaction_date.desc())
         .offset(skip)
         .limit(limit)
     )
 
-    return db.scalars(query).all()
+    return db.execute(statement).scalars().all()
 
 
 # =========================================================
@@ -292,107 +275,81 @@ def get_inventory_transactions(
 # =========================================================
 
 @router.get("/summary")
-def get_transaction_summary(
+def get_inventory_transaction_summary(
     facility_id: int | None = Query(default=None, gt=0),
     batch_id: int | None = Query(default=None, gt=0),
     db: Session = Depends(get_db)
 ):
 
-    query = select(
-        func.coalesce(
-            func.sum(
-                case(
-                    (
-                        InventoryTransaction.transaction_type == "RECEIVED",
-                        InventoryTransaction.quantity
-                    ),
-                    else_=0
-                )
-            ), 0
-        ).label("total_received"),
-
-        func.coalesce(
-            func.sum(
-                case(
-                    (
-                        InventoryTransaction.transaction_type == "ISSUED",
-                        InventoryTransaction.quantity
-                    ),
-                    else_=0
-                )
-            ), 0
-        ).label("total_issued"),
-
-        func.coalesce(
-            func.sum(
-                case(
-                    (
-                        InventoryTransaction.transaction_type == "DAMAGED",
-                        InventoryTransaction.quantity
-                    ),
-                    else_=0
-                )
-            ), 0
-        ).label("total_damaged"),
-
-        func.coalesce(
-            func.sum(
-                case(
-                    (
-                        InventoryTransaction.adjustment_direction == "INCREASE",
-                        InventoryTransaction.quantity
-                    ),
-                    else_=0
-                )
-            ), 0
-        ).label("adjustment_increase"),
-
-        func.coalesce(
-            func.sum(
-                case(
-                    (
-                        InventoryTransaction.adjustment_direction == "DECREASE",
-                        InventoryTransaction.quantity
-                    ),
-                    else_=0
-                )
-            ), 0
-        ).label("adjustment_decrease")
+    statement = select(
+        InventoryTransaction.transaction_type,
+        func.count(InventoryTransaction.transaction_id).label(
+            "total_transactions"
+        ),
+        func.sum(InventoryTransaction.quantity).label(
+            "total_quantity"
+        )
     )
 
     if facility_id is not None:
-        query = query.where(
+        statement = statement.where(
             InventoryTransaction.facility_id == facility_id
         )
 
     if batch_id is not None:
-        query = query.where(
+        statement = statement.where(
             InventoryTransaction.batch_id == batch_id
         )
 
-    result = db.execute(query).one()
-
-    total_received = int(result.total_received)
-    total_issued = int(result.total_issued)
-    total_damaged = int(result.total_damaged)
-    adjustment_increase = int(result.adjustment_increase)
-    adjustment_decrease = int(result.adjustment_decrease)
-
-    net_usable_stock_movement = (
-        total_received
-        - total_issued
-        - total_damaged
-        + adjustment_increase
-        - adjustment_decrease
+    statement = statement.group_by(
+        InventoryTransaction.transaction_type
     )
 
+    results = db.execute(statement).mappings().all()
+
     return {
-        "facility_id": facility_id,
-        "batch_id": batch_id,
-        "total_received": total_received,
-        "total_issued": total_issued,
-        "total_damaged": total_damaged,
-        "adjustment_increase": adjustment_increase,
-        "adjustment_decrease": adjustment_decrease,
-        "net_usable_stock_movement": net_usable_stock_movement
+        "total_transaction_types": len(results),
+        "summary": [
+            dict(row)
+            for row in results
+        ]
     }
+
+
+# =========================================================
+# GET: TRANSACTION COUNTS BY FACILITY
+# =========================================================
+
+@router.get("/summary/facilities")
+def get_transaction_summary_by_facility(
+    db: Session = Depends(get_db)
+):
+
+    statement = (
+        select(
+            Facility.facility_id,
+            Facility.facility_name,
+            func.count(
+                InventoryTransaction.transaction_id
+            ).label("total_transactions"),
+            func.sum(
+                InventoryTransaction.quantity
+            ).label("total_quantity")
+        )
+        .join(
+            InventoryTransaction,
+            InventoryTransaction.facility_id == Facility.facility_id
+        )
+        .group_by(
+            Facility.facility_id,
+            Facility.facility_name
+        )
+        .order_by(Facility.facility_id)
+    )
+
+    results = db.execute(statement).mappings().all()
+
+    return [
+        dict(row)
+        for row in results
+    ]

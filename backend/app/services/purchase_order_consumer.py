@@ -6,6 +6,14 @@ import time
 from kafka import KafkaConsumer, TopicPartition
 from kafka.structs import OffsetAndMetadata
 
+from sqlalchemy.dialects.postgresql import insert
+
+from backend.app.database.connection import SessionLocal
+from backend.app.models.processed_event import ProcessedEvent
+
+from backend.app.services.kafka_message_handler import (
+    handle_kafka_message
+)
 from backend.app.services.kafka_service import (
     publish_dead_letter_event
 )
@@ -29,12 +37,19 @@ VALID_EVENT_TYPES = {
 }
 
 
-def process_purchase_order_event(event: dict) -> bool:
+def process_purchase_order_event(
+    event: dict,
+    topic: str = "purchase-order-events"
+) -> bool:
 
     if not isinstance(event, dict):
         raise ValueError("Event must be a dictionary")
 
+    event_id = event.get("event_id")
     event_type = event.get("event_type")
+
+    if not isinstance(event_id, str) or not event_id.strip():
+        raise ValueError("Missing or invalid event_id")
 
     if event_type not in VALID_EVENT_TYPES:
         raise ValueError(
@@ -44,22 +59,63 @@ def process_purchase_order_event(event: dict) -> bool:
     if not event.get("purchase_order_id"):
         raise ValueError("Missing purchase_order_id")
 
-    print("\n========== PURCHASE ORDER EVENT ==========")
-    print("Event ID:", event.get("event_id"))
-    print("Event Type:", event_type)
-    print("Purchase Order ID:", event.get("purchase_order_id"))
-    print("Facility ID:", event.get("facility_id"))
-    print("Supplier ID:", event.get("supplier_id"))
+    db = SessionLocal()
 
-    if event_type in {
-        "PURCHASE_ORDER_PARTIALLY_RECEIVED",
-        "PURCHASE_ORDER_RECEIVED"
-    }:
-        print("Received Items:", event.get("received_items", []))
+    try:
 
-    print("Event Timestamp:", event.get("event_timestamp"))
+        statement = (
+            insert(ProcessedEvent)
+            .values(
+                event_id=event_id,
+                topic=topic,
+                event_type=event_type
+            )
+            .on_conflict_do_nothing(
+                index_elements=[ProcessedEvent.event_id]
+            )
+            .returning(ProcessedEvent.event_id)
+        )
 
-    return True
+        result = db.execute(statement).scalar_one_or_none()
+
+        db.commit()
+
+        if result is None:
+            logger.info(
+                "Duplicate purchase order event skipped: %s",
+                event_id
+            )
+            print("Duplicate event skipped:", event_id)
+            return False
+
+        print("\n========== PURCHASE ORDER EVENT ==========")
+        print("Event ID:", event_id)
+        print("Event Type:", event_type)
+        print("Purchase Order ID:", event.get("purchase_order_id"))
+        print("Facility ID:", event.get("facility_id"))
+        print("Supplier ID:", event.get("supplier_id"))
+
+        if event_type in {
+            "PURCHASE_ORDER_PARTIALLY_RECEIVED",
+            "PURCHASE_ORDER_RECEIVED"
+        }:
+            print("Received Items:", event.get("received_items", []))
+
+        print("Event Timestamp:", event.get("event_timestamp"))
+
+        logger.info(
+            "Purchase order event processed: %s",
+            event_id
+        )
+
+        return True
+
+    except Exception:
+        db.rollback()
+        raise
+
+    finally:
+        db.close()
 
 
 def consume_purchase_order_events(max_messages=None):
@@ -84,73 +140,19 @@ def consume_purchase_order_events(max_messages=None):
 
         for message in consumer:
 
-            try:
-                event = json.loads(message.value.decode("utf-8"))
+            success = handle_kafka_message(
+                consumer=consumer,
+                message=message,
+                processor=process_purchase_order_event,
+                stream_name="Purchase Order"
+            )
 
-                success = False
-                last_error = None
+            if not success:
+                break
 
-                for attempt in range(1, MAX_RETRIES + 1):
+            processed += 1
 
-                    try:
-                        process_purchase_order_event(event)
-                        success = True
-                        break
-
-                    except Exception as error:
-                        last_error = error
-
-                        logger.warning(
-                            "Purchase order processing failed. "
-                            "Attempt %s/%s: %s",
-                            attempt,
-                            MAX_RETRIES,
-                            error
-                        )
-
-                        if attempt < MAX_RETRIES:
-                            time.sleep(RETRY_DELAY_SECONDS)
-
-                if not success:
-
-                    print("Maximum retries reached. Publishing to DLQ.")
-
-                    publish_dead_letter_event(
-                        original_topic=message.topic,
-                        event=event,
-                        error_message=str(last_error),
-                        retry_count=MAX_RETRIES
-                    )
-
-                    print("Event successfully published to DLQ.")
-
-                partition = TopicPartition(
-                    message.topic,
-                    message.partition
-                )
-
-                consumer.commit({
-                    partition: OffsetAndMetadata(
-                        message.offset + 1,
-                        ""
-                    )
-                })
-
-                processed += 1
-
-                print(
-                    "Partition:", message.partition,
-                    "| Offset:", message.offset
-                )
-
-                if max_messages and processed >= max_messages:
-                    break
-
-            except Exception:
-                logger.exception(
-                    "Failed to process or publish purchase order event. "
-                    "Offset not committed."
-                )
+            if max_messages and processed >= max_messages:
                 break
 
     except KeyboardInterrupt:
