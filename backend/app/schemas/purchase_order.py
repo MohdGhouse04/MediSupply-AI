@@ -1,5 +1,5 @@
 
-from datetime import datetime
+from datetime import datetime, date
 from decimal import Decimal
 from typing import Literal
 
@@ -98,3 +98,51 @@ class PurchaseOrderResponse(BaseModel):
 
     remarks: str | None
 
+class PurchaseOrderReceiveItem(BaseModel):
+
+    purchase_order_item_id: int = Field(gt=0)
+
+    received_quantity: int = Field(gt=0)
+
+    batch_number: str = Field(min_length=1, max_length=100)
+
+    manufactured_on: date | None = None
+
+    expires_on: date
+
+    remarks: str | None = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def validate_dates(self):
+
+        if (
+            self.manufactured_on is not None
+            and self.expires_on <= self.manufactured_on
+        ):
+            raise ValueError(
+                "Expiry date must be after manufacturing date"
+            )
+
+        return self
+
+
+class PurchaseOrderReceive(BaseModel):
+
+    items: list[PurchaseOrderReceiveItem] = Field(min_length=1)
+
+    remarks: str | None = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def validate_unique_items(self):
+
+        item_ids = [
+            item.purchase_order_item_id
+            for item in self.items
+        ]
+
+        if len(item_ids) != len(set(item_ids)):
+            raise ValueError(
+                "A purchase order item can appear only once per receipt"
+            )
+
+        return self

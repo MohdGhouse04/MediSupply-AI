@@ -1,6 +1,7 @@
 
-from datetime import datetime
+from datetime import datetime, date
 from decimal import Decimal
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -12,20 +13,51 @@ from backend.app.models import (
     PurchaseOrderItem,
     Facility,
     Supplier,
-    Medicine
+    Medicine,
+    MedicineBatch,
+    Inventory,
+    InventoryTransaction
 )
 
 from backend.app.schemas.purchase_order import (
     PurchaseOrderCreate,
-    PurchaseOrderResponse,
-    PurchaseOrderStatusUpdate
+    PurchaseOrderStatusUpdate,
+    PurchaseOrderReceive
 )
+
+from backend.app.services.kafka_service import publish_event
 
 
 router = APIRouter(
     prefix="/purchase-orders",
     tags=["Purchase Orders"]
 )
+
+logger = logging.getLogger(__name__)
+
+
+# --------------------------------------------------
+# KAFKA EVENT PUBLISHER
+# --------------------------------------------------
+
+def publish_purchase_order_event(event: dict, purchase_order_id: int):
+    try:
+        result = publish_event(
+            topic="purchase-order-events",
+            event=event,
+            key=f"purchase-order-{purchase_order_id}"
+        )
+
+        logger.info(
+            "Purchase order Kafka event published: %s",
+            result
+        )
+
+    except Exception:
+        logger.exception(
+            "Failed to publish purchase order Kafka event: PO-%s",
+            purchase_order_id
+        )
 
 
 # --------------------------------------------------
@@ -112,6 +144,27 @@ def create_purchase_order(
 
         db.commit()
         db.refresh(purchase_order)
+
+        event = {
+            "event_id": f"PO-{purchase_order.purchase_order_id}-CREATED",
+            "event_type": "PURCHASE_ORDER_CREATED",
+            "purchase_order_id": purchase_order.purchase_order_id,
+            "facility_id": purchase_order.facility_id,
+            "supplier_id": purchase_order.supplier_id,
+            "status": purchase_order.status,
+            "total_amount": str(purchase_order.total_amount),
+            "expected_delivery_date": (
+                str(purchase_order.expected_delivery_date)
+                if purchase_order.expected_delivery_date
+                else None
+            ),
+            "event_timestamp": datetime.now().isoformat()
+        }
+
+        publish_purchase_order_event(
+            event,
+            purchase_order.purchase_order_id
+        )
 
         return {
             "message": "Purchase order created successfully",
@@ -274,6 +327,24 @@ def update_purchase_order_status(
         db.commit()
         db.refresh(purchase_order)
 
+        event = {
+            "event_id": (
+                f"PO-{purchase_order_id}-STATUS-{new_status}"
+            ),
+            "event_type": f"PURCHASE_ORDER_{new_status}",
+            "purchase_order_id": purchase_order_id,
+            "facility_id": purchase_order.facility_id,
+            "supplier_id": purchase_order.supplier_id,
+            "old_status": current_status,
+            "new_status": new_status,
+            "event_timestamp": datetime.now().isoformat()
+        }
+
+        publish_purchase_order_event(
+            event,
+            purchase_order_id
+        )
+
         return {
             "message": "Purchase order status updated",
             "purchase_order_id": purchase_order_id,
@@ -283,5 +354,250 @@ def update_purchase_order_status(
 
     except Exception:
 
+        db.rollback()
+        raise
+
+
+# --------------------------------------------------
+# RECEIVE PURCHASE ORDER GOODS
+# --------------------------------------------------
+
+@router.post("/{purchase_order_id}/receive")
+def receive_purchase_order(
+    purchase_order_id: int,
+    payload: PurchaseOrderReceive,
+    db: Session = Depends(get_db)
+):
+
+    try:
+
+        purchase_order = (
+            db.query(PurchaseOrder)
+            .filter(
+                PurchaseOrder.purchase_order_id == purchase_order_id
+            )
+            .with_for_update()
+            .first()
+        )
+
+        if purchase_order is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Purchase order not found"
+            )
+
+        if purchase_order.status not in [
+            "ORDERED",
+            "PARTIALLY_RECEIVED"
+        ]:
+            raise HTTPException(
+                status_code=409,
+                detail="Goods can only be received for ordered purchase orders"
+            )
+
+        received_summary = []
+
+        for receipt_item in payload.items:
+
+            order_item = (
+                db.query(PurchaseOrderItem)
+                .filter(
+                    PurchaseOrderItem.purchase_order_item_id
+                    == receipt_item.purchase_order_item_id,
+                    PurchaseOrderItem.purchase_order_id
+                    == purchase_order_id
+                )
+                .with_for_update()
+                .first()
+            )
+
+            if order_item is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        f"Purchase order item "
+                        f"{receipt_item.purchase_order_item_id} not found"
+                    )
+                )
+
+            outstanding_quantity = (
+                order_item.ordered_quantity
+                - order_item.received_quantity
+            )
+
+            if receipt_item.received_quantity > outstanding_quantity:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Received quantity exceeds outstanding quantity "
+                        f"for medicine {order_item.medicine_id}. "
+                        f"Outstanding: {outstanding_quantity}"
+                    )
+                )
+
+            if receipt_item.expires_on <= date.today():
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cannot receive an already expired batch"
+                )
+
+            batch = (
+                db.query(MedicineBatch)
+                .filter(
+                    MedicineBatch.medicine_id == order_item.medicine_id,
+                    MedicineBatch.supplier_id == purchase_order.supplier_id,
+                    MedicineBatch.batch_number == receipt_item.batch_number
+                )
+                .with_for_update()
+                .first()
+            )
+
+            if batch is None:
+
+                batch = MedicineBatch(
+                    medicine_id=order_item.medicine_id,
+                    supplier_id=purchase_order.supplier_id,
+                    batch_number=receipt_item.batch_number,
+                    manufactured_on=receipt_item.manufactured_on,
+                    expires_on=receipt_item.expires_on,
+                    received_quantity=receipt_item.received_quantity,
+                    unit_cost=order_item.unit_cost,
+                    batch_status="AVAILABLE"
+                )
+
+                db.add(batch)
+                db.flush()
+
+            else:
+
+                if batch.batch_status != "AVAILABLE":
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Cannot receive stock into a quarantined or recalled batch"
+                    )
+
+                if (
+                    batch.manufactured_on != receipt_item.manufactured_on
+                    or batch.expires_on != receipt_item.expires_on
+                    or batch.unit_cost != order_item.unit_cost
+                ):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Existing batch metadata does not match the delivery"
+                    )
+
+                batch.received_quantity += receipt_item.received_quantity
+
+            inventory = (
+                db.query(Inventory)
+                .filter(
+                    Inventory.facility_id == purchase_order.facility_id,
+                    Inventory.batch_id == batch.batch_id
+                )
+                .with_for_update()
+                .first()
+            )
+
+            if inventory is None:
+
+                inventory = Inventory(
+                    facility_id=purchase_order.facility_id,
+                    batch_id=batch.batch_id,
+                    quantity_on_hand=receipt_item.received_quantity,
+                    reserved_quantity=0,
+                    damaged_quantity=0
+                )
+
+                db.add(inventory)
+
+            else:
+
+                inventory.quantity_on_hand += receipt_item.received_quantity
+
+            transaction = InventoryTransaction(
+                facility_id=purchase_order.facility_id,
+                batch_id=batch.batch_id,
+                transaction_type="RECEIVED",
+                quantity=receipt_item.received_quantity,
+                reference_number=f"PO-{purchase_order_id}",
+                remarks=(
+                    receipt_item.remarks
+                    or payload.remarks
+                    or f"Goods received against PO-{purchase_order_id}"
+                )
+            )
+
+            db.add(transaction)
+
+            order_item.received_quantity += receipt_item.received_quantity
+
+            received_summary.append({
+                "purchase_order_item_id": order_item.purchase_order_item_id,
+                "medicine_id": order_item.medicine_id,
+                "batch_id": batch.batch_id,
+                "batch_number": batch.batch_number,
+                "received_quantity": receipt_item.received_quantity,
+                "total_received_quantity": order_item.received_quantity,
+                "outstanding_quantity": (
+                    order_item.ordered_quantity
+                    - order_item.received_quantity
+                )
+            })
+
+        all_items = (
+            db.query(PurchaseOrderItem)
+            .filter(
+                PurchaseOrderItem.purchase_order_id == purchase_order_id
+            )
+            .with_for_update()
+            .all()
+        )
+
+        all_received = all(
+            item.received_quantity == item.ordered_quantity
+            for item in all_items
+        )
+
+        if all_received:
+            purchase_order.status = "RECEIVED"
+            purchase_order.received_at = datetime.now()
+        else:
+            purchase_order.status = "PARTIALLY_RECEIVED"
+
+        final_status = purchase_order.status
+
+        db.commit()
+
+        event = {
+            "event_id": (
+                f"PO-{purchase_order_id}-RECEIPT-"
+                f"{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
+            ),
+            "event_type": (
+                "PURCHASE_ORDER_RECEIVED"
+                if final_status == "RECEIVED"
+                else "PURCHASE_ORDER_PARTIALLY_RECEIVED"
+            ),
+            "purchase_order_id": purchase_order_id,
+            "facility_id": purchase_order.facility_id,
+            "supplier_id": purchase_order.supplier_id,
+            "purchase_order_status": final_status,
+            "received_items": received_summary,
+            "event_timestamp": datetime.now().isoformat()
+        }
+
+        publish_purchase_order_event(
+            event,
+            purchase_order_id
+        )
+
+        return {
+            "message": "Goods received successfully",
+            "purchase_order_id": purchase_order_id,
+            "purchase_order_status": final_status,
+            "received_items": received_summary
+        }
+
+    except Exception:
         db.rollback()
         raise

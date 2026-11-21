@@ -1,4 +1,5 @@
 
+import logging
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -16,7 +17,10 @@ from backend.app.schemas.inventory_transaction import (
     InventoryTransactionCreate,
     InventoryTransactionResponse
 )
+from backend.app.services.kafka_service import publish_event
 
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/transactions",
@@ -25,7 +29,7 @@ router = APIRouter(
 
 
 # =========================================================
-# POST: CREATE INVENTORY TRANSACTION
+# POST: CREATE INVENTORY TRANSACTION + KAFKA EVENT
 # =========================================================
 
 @router.post(
@@ -40,7 +44,7 @@ def create_inventory_transaction(
 
     try:
 
-        # 1. Check whether facility exists
+        # 1. Check facility
         facility = db.get(Facility, transaction.facility_id)
 
         if not facility:
@@ -49,7 +53,7 @@ def create_inventory_transaction(
                 detail="Facility not found"
             )
 
-        # 2. Check whether medicine batch exists
+        # 2. Check medicine batch
         batch = db.get(MedicineBatch, transaction.batch_id)
 
         if not batch:
@@ -58,7 +62,7 @@ def create_inventory_transaction(
                 detail="Medicine batch not found"
             )
 
-        # 3. Find inventory record and lock it
+        # 3. Lock inventory record
         inventory = db.execute(
             select(Inventory)
             .where(
@@ -68,7 +72,7 @@ def create_inventory_transaction(
             .with_for_update()
         ).scalar_one_or_none()
 
-        # 4. Create inventory record if it does not exist
+        # 4. Create inventory if missing
         if not inventory:
 
             if transaction.transaction_type != "RECEIVED":
@@ -95,11 +99,8 @@ def create_inventory_transaction(
             - inventory.damaged_quantity
         )
 
-        # =================================================
-        # 6. PROCESS TRANSACTION TYPES
-        # =================================================
+        # 6. Process transaction types
 
-        # RECEIVED
         if transaction.transaction_type == "RECEIVED":
 
             if (
@@ -113,7 +114,6 @@ def create_inventory_transaction(
 
             inventory.quantity_on_hand += transaction.quantity
 
-        # ISSUED
         elif transaction.transaction_type == "ISSUED":
 
             if transaction.quantity > usable_stock:
@@ -124,7 +124,6 @@ def create_inventory_transaction(
 
             inventory.quantity_on_hand -= transaction.quantity
 
-        # DAMAGED
         elif transaction.transaction_type == "DAMAGED":
 
             if transaction.quantity > usable_stock:
@@ -135,10 +134,8 @@ def create_inventory_transaction(
 
             inventory.damaged_quantity += transaction.quantity
 
-        # ADJUSTMENT
         elif transaction.transaction_type == "ADJUSTMENT":
 
-            # INCREASE STOCK
             if transaction.adjustment_direction == "INCREASE":
 
                 if (
@@ -152,7 +149,6 @@ def create_inventory_transaction(
 
                 inventory.quantity_on_hand += transaction.quantity
 
-            # DECREASE STOCK
             elif transaction.adjustment_direction == "DECREASE":
 
                 if transaction.quantity > usable_stock:
@@ -163,10 +159,7 @@ def create_inventory_transaction(
 
                 inventory.quantity_on_hand -= transaction.quantity
 
-        # =================================================
-        # 7. SAVE TRANSACTION HISTORY
-        # =================================================
-
+        # 7. Save transaction history
         new_transaction = InventoryTransaction(
             facility_id=transaction.facility_id,
             batch_id=transaction.batch_id,
@@ -179,10 +172,49 @@ def create_inventory_transaction(
 
         db.add(new_transaction)
 
-        # 8. Commit changes
+        # 8. Commit PostgreSQL first
         db.commit()
-
         db.refresh(new_transaction)
+
+        # 9. Build Kafka event
+        event = {
+            "event_id": new_transaction.transaction_id,
+            "event_type": f"INVENTORY_{transaction.transaction_type}",
+            "transaction_id": new_transaction.transaction_id,
+            "facility_id": transaction.facility_id,
+            "medicine_id": batch.medicine_id,
+            "batch_id": transaction.batch_id,
+            "transaction_type": transaction.transaction_type,
+            "quantity": transaction.quantity,
+            "adjustment_direction": transaction.adjustment_direction,
+            "reference_number": transaction.reference_number,
+            "transaction_date": (
+                new_transaction.transaction_date.isoformat()
+                if new_transaction.transaction_date
+                else None
+            )
+        }
+
+        # 10. Publish event after database commit
+        try:
+
+            result = publish_event(
+                topic="inventory-events",
+                event=event,
+                key=f"facility-{transaction.facility_id}"
+            )
+
+            logger.info(
+                "Kafka inventory event published: %s",
+                result
+            )
+
+        except Exception:
+
+            logger.exception(
+                "Inventory transaction %s committed, but Kafka publishing failed",
+                new_transaction.transaction_id
+            )
 
         return new_transaction
 
@@ -214,21 +246,16 @@ def get_inventory_transactions(
 
     query = select(InventoryTransaction)
 
-    # Filter by facility
     if facility_id is not None:
-
         query = query.where(
             InventoryTransaction.facility_id == facility_id
         )
 
-    # Filter by batch
     if batch_id is not None:
-
         query = query.where(
             InventoryTransaction.batch_id == batch_id
         )
 
-    # Filter by transaction type
     if transaction_type is not None:
 
         valid_types = [
@@ -248,7 +275,6 @@ def get_inventory_transactions(
             InventoryTransaction.transaction_type == transaction_type
         )
 
-    # Sorting and pagination
     query = (
         query
         .order_by(
@@ -259,6 +285,7 @@ def get_inventory_transactions(
     )
 
     return db.scalars(query).all()
+
 
 # =========================================================
 # GET: INVENTORY TRANSACTION SUMMARY
