@@ -7,6 +7,7 @@ from sqlalchemy import (
     TIMESTAMP,
     UniqueConstraint,
     CheckConstraint,
+    Index,
     text
 )
 
@@ -65,5 +66,7 @@ class Inventory(Base):
         CheckConstraint("damaged_quantity >= 0"),
         CheckConstraint(
             "reserved_quantity + damaged_quantity <= quantity_on_hand"
-        )
+        ),
+        Index("idx_inventory_batch", "batch_id"),
+        Index("idx_inventory_facility", "facility_id")
     )

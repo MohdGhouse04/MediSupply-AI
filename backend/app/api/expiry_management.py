@@ -16,6 +16,10 @@ from backend.app.models import (
     MedicineBatch
 )
 
+from backend.app.services.expiry_forecasting import (
+    simulate_fefo_wastage
+)
+
 
 router = APIRouter(
     prefix="/expiry-management",
@@ -32,7 +36,7 @@ FORECAST_FILE = (
 )
 
 
-def load_30_day_forecasts():
+def load_60_day_forecasts():
 
     if not FORECAST_FILE.exists():
         return {}
@@ -45,7 +49,7 @@ def load_30_day_forecasts():
 
         for row in reader:
 
-            if int(row["horizon"]) != 30:
+            if int(row["horizon"]) != 60:
                 continue
 
             key = (
@@ -135,7 +139,7 @@ def get_expiry_recommendations(
             "projected_wastage": None
         })
 
-    forecasts = load_30_day_forecasts()
+    forecasts = load_60_day_forecasts()
 
     recommendations = []
 
@@ -172,88 +176,26 @@ def get_expiry_recommendations(
         first_forecast_date = forecast_dates[0]
         last_forecast_date = forecast_dates[-1]
 
-        batches.sort(
-            key=lambda item: (
-                item["expires_on"],
-                item["batch_id"]
-            )
+        # Use the independently tested FEFO forecasting service.
+        batch_forecasts = simulate_fefo_wastage(
+            batches,
+            forecast
         )
 
-        # Simulate daily demand using FEFO allocation.
-        for forecast_date in forecast_dates:
-
-            daily_demand = forecast[forecast_date]
-
-            # Remove batches that expired before this forecast date.
-            for batch in batches:
-
-                if (
-                    batch["remaining_stock"] > 0
-                    and batch["expires_on"] < forecast_date
-                ):
-
-                    batch["projected_wastage"] = (
-                        batch["remaining_stock"]
-                    )
-
-                    batch["remaining_stock"] = 0
-
-            # Consume available stock using FEFO.
-            for batch in batches:
-
-                if daily_demand <= 0:
-                    break
-
-                if batch["remaining_stock"] <= 0:
-                    continue
-
-                if batch["expires_on"] < forecast_date:
-                    continue
-
-                issued_quantity = min(
-                    batch["remaining_stock"],
-                    daily_demand
-                )
-
-                batch["remaining_stock"] -= issued_quantity
-                daily_demand -= issued_quantity
-
-            # Remaining stock expires at the end of its expiry date.
-            for batch in batches:
-
-                if batch["expires_on"] == forecast_date:
-
-                    batch["projected_wastage"] = (
-                        batch["remaining_stock"]
-                    )
-
-                    batch["remaining_stock"] = 0
-
         for batch in batches:
+            batch_result = batch_forecasts[batch["batch_id"]]
 
-            expiry_date = batch["expires_on"]
+            projected_wastage = batch_result[
+                "projected_wastage_units"
+            ]
 
-            # Expired today or before the forecast starts.
-            if expiry_date < first_forecast_date:
+            forecast_status = batch_result["forecast_status"]
 
-                projected_wastage = batch["usable_stock"]
-
-                forecast_status = (
-                    "EXPIRES_BEFORE_FORECAST_WINDOW"
-                )
-
-            # Expiry falls inside the forecast coverage.
-            elif expiry_date <= last_forecast_date:
-
-                projected_wastage = (
-                    batch["projected_wastage"]
-                )
-
-                if projected_wastage is None:
+            if projected_wastage is None:
                     projected_wastage = batch["remaining_stock"]
 
                 forecast_status = (
-                    "ESTIMATED_WITHIN_30_DAY_FORECAST"
+                    "ESTIMATED_WITHIN_60_DAY_FORECAST"
                 )
 
             # Forecast does not cover the batch expiry date.
@@ -315,7 +257,8 @@ def get_expiry_recommendations(
     ]
 
     return {
-        "forecast_model": "30-day demand forecast",
+        "forecast_model": "60-day demand forecast (experimental)",
+        "forecast_horizon_days": 60,
         "forecast_file": str(FORECAST_FILE.name),
         "total_batches_reviewed": len(recommendations),
         "batches_with_insufficient_forecast": sum(

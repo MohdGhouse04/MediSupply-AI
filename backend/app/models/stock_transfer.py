@@ -77,7 +77,7 @@ class StockTransfer(Base):
 
     requested_at: Mapped[datetime] = mapped_column(
         DateTime,
-        nullable=False,
+        nullable=True,
         server_default=text("CURRENT_TIMESTAMP")
     )
 

@@ -82,6 +82,7 @@ class InventoryTransaction(Base):
 
     transaction_date: Mapped[datetime] = mapped_column(
         DateTime,
+        nullable=True,
         server_default=text("CURRENT_TIMESTAMP")
     )
 

@@ -9,6 +9,7 @@ from sqlalchemy import (
     ForeignKey,
     UniqueConstraint,
     CheckConstraint,
+    Index,
     text
 )
 
@@ -61,5 +62,6 @@ class MedicineBatch(Base):
         ),
         CheckConstraint(
             "batch_status IN ('AVAILABLE', 'QUARANTINED', 'RECALLED')"
-        )
+        ),
+        Index("idx_batches_medicine", "medicine_id")
     )

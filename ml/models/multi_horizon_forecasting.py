@@ -1,6 +1,5 @@
 
 import os
-from tokenize import group
 import joblib
 import numpy as np
 import pandas as pd
@@ -157,7 +156,7 @@ def main():
             f"medicine {medicine_id}"
         )
 
-        for horizon in [7, 14, 30]:
+        for horizon in [7, 14, 30, 60]:
 
             forecasts = forecast_group(
                 model,

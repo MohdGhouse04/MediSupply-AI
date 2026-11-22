@@ -47,6 +47,10 @@ services:
     ports:
       - "8000:8000"
 
+    volumes:
+      - ./ml/data/stockout_alerts.csv:/app/ml/data/stockout_alerts.csv:ro
+      - ./data/processed/multi_horizon_forecasts.csv:/app/data/processed/multi_horizon_forecasts.csv:ro
+
     env_file:
       - .env
 
@@ -86,6 +90,27 @@ services:
     container_name: medisupply-purchase-order-consumer
     restart: unless-stopped
     command: python -m backend.app.services.purchase_order_consumer
+
+    env_file:
+      - .env
+
+    environment:
+      DATABASE_URL: postgresql+psycopg://mohdghouse@host.docker.internal:5432/medisupply
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+
+  inventory-consumer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: medisupply-inventory-consumer
+    restart: unless-stopped
+    command: python -m backend.app.services.kafka_consumer
 
     env_file:
       - .env

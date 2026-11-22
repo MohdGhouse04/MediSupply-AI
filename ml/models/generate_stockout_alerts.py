@@ -1,27 +1,17 @@
-
 from pathlib import Path
 
 import joblib
 import pandas as pd
 
 
-# --------------------------------------------------
-# PATHS
-# --------------------------------------------------
-
 ROOT = Path(__file__).resolve().parents[2]
 
-DATA_PATH = ROOT / "ml/data/stockout_dataset.csv"
+DATA_PATH = ROOT / "ml/data/live_stockout_features.csv"
 MODEL_PATH = ROOT / "ml/models/saved/best_stockout_model.joblib"
 THRESHOLD_PATH = ROOT / "ml/models/saved/stockout_threshold.joblib"
 
 OUTPUT_PATH = ROOT / "ml/data/stockout_alerts.csv"
 
-
-# --------------------------------------------------
-# MODEL FEATURES
-# Must match the training feature order
-# --------------------------------------------------
 
 FEATURES = [
     "facility_id",
@@ -43,10 +33,6 @@ FEATURES = [
 ]
 
 
-# --------------------------------------------------
-# LOAD THRESHOLD
-# --------------------------------------------------
-
 def load_threshold(path):
 
     artifact = joblib.load(path)
@@ -55,7 +41,6 @@ def load_threshold(path):
         return float(artifact)
 
     if isinstance(artifact, dict):
-
         for key in [
             "threshold",
             "selected_threshold",
@@ -65,14 +50,9 @@ def load_threshold(path):
                 return float(artifact[key])
 
     raise ValueError(
-        f"Unable to identify threshold in {path}. "
-        f"Artifact type: {type(artifact)}"
+        f"Unable to identify threshold in {path}"
     )
 
-
-# --------------------------------------------------
-# GENERATE ALERTS
-# --------------------------------------------------
 
 def main():
 
@@ -83,15 +63,16 @@ def main():
 
     print(f"Selected threshold: {threshold:.4f}")
 
-    print("\nLoading stockout dataset...")
+    print("\nLoading live stockout features...")
 
-    df = pd.read_csv(DATA_PATH)
-
-    df["date"] = pd.to_datetime(df["date"])
+    latest = pd.read_csv(
+        DATA_PATH,
+        parse_dates=["date"]
+    )
 
     missing = [
         column for column in FEATURES
-        if column not in df.columns
+        if column not in latest.columns
     ]
 
     if missing:
@@ -99,23 +80,14 @@ def main():
             f"Missing model features: {missing}"
         )
 
-    # Latest eligible historical observation
-    latest = (
-        df.sort_values("date")
-        .groupby(
-            ["facility_id", "medicine_id"],
-            as_index=False
-        )
-        .tail(1)
-        .copy()
-    )
+    if latest.empty:
+        raise ValueError("Live feature dataset is empty.")
 
-    latest = latest.sort_values(
-        ["facility_id", "medicine_id"]
-    )
+    if latest[FEATURES].isnull().any().any():
+        raise ValueError("Live features contain missing values.")
 
-    print(f"Facility-medicine combinations: {len(latest)}")
-    print(f"Latest eligible date: {latest['date'].max().date()}")
+    print("Feature records:", len(latest))
+    print("Latest observation:", latest["date"].max().date())
 
     X = latest[FEATURES]
 
@@ -124,7 +96,6 @@ def main():
     probabilities = model.predict_proba(X)[:, 1]
 
     latest["stockout_probability"] = probabilities
-
     latest["risk_threshold"] = threshold
 
     latest["risk_status"] = (
@@ -138,10 +109,6 @@ def main():
         "HIGH_RISK": "REVIEW_INVENTORY",
         "LOW_RISK": "NO_IMMEDIATE_ALERT"
     })
-
-    # --------------------------------------------------
-    # OUTPUT
-    # --------------------------------------------------
 
     output_columns = [
         "date",
@@ -168,42 +135,30 @@ def main():
         alerts["risk_threshold"].round(4)
     )
 
-    alerts.to_csv(OUTPUT_PATH, index=False)
-
-    # --------------------------------------------------
-    # SUMMARY
-    # --------------------------------------------------
+    alerts.to_csv(
+        OUTPUT_PATH,
+        index=False
+    )
 
     print("\n========== STOCKOUT ALERT SUMMARY ==========")
 
-    print(
-        alerts["risk_status"].value_counts()
-    )
+    print(alerts["risk_status"].value_counts())
 
     print("\n========== GENERATED ALERTS ==========")
 
-    high_risk = alerts[
-        alerts["risk_status"] == "HIGH_RISK"
-    ]
-
-    if high_risk.empty:
-        print("No high-risk alerts generated.")
-
-    else:
-        print(
-            high_risk[
-                [
-                    "facility_id",
-                    "medicine_id",
-                    "stockout_probability",
-                    "risk_status",
-                    "alert_action"
-                ]
-            ].to_string(index=False)
-        )
+    print(
+        alerts[
+            [
+                "facility_id",
+                "medicine_id",
+                "stockout_probability",
+                "risk_status",
+                "alert_action"
+            ]
+        ].to_string(index=False)
+    )
 
     print(f"\nSaved alerts to: {OUTPUT_PATH}")
-
     print("\nStockout alert generation completed!")
 
 

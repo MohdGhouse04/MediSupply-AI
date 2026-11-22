@@ -7,7 +7,8 @@ from backend.app.models.inventory_transaction import InventoryTransaction
 from backend.app.models.stock_transfer import StockTransfer
 from backend.app.models.purchase_order import (
     PurchaseOrder,
-    PurchaseOrderItem
+    PurchaseOrderItem,
 )
 from backend.app.models.outbox_event import OutboxEvent
 from backend.app.models.processed_event import ProcessedEvent
+from backend.app.models.stockout_alert import StockoutAlert
