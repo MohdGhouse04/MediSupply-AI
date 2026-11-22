@@ -173,9 +173,6 @@ def get_expiry_recommendations(
 
             continue
 
-        first_forecast_date = forecast_dates[0]
-        last_forecast_date = forecast_dates[-1]
-
         # Use the independently tested FEFO forecasting service.
         batch_forecasts = simulate_fefo_wastage(
             batches,
@@ -183,6 +180,8 @@ def get_expiry_recommendations(
         )
 
         for batch in batches:
+            expiry_date = batch["expires_on"]
+
             batch_result = batch_forecasts[batch["batch_id"]]
 
             projected_wastage = batch_result[
@@ -190,22 +189,6 @@ def get_expiry_recommendations(
             ]
 
             forecast_status = batch_result["forecast_status"]
-
-            if projected_wastage is None:
-                    projected_wastage = batch["remaining_stock"]
-
-                forecast_status = (
-                    "ESTIMATED_WITHIN_60_DAY_FORECAST"
-                )
-
-            # Forecast does not cover the batch expiry date.
-            else:
-
-                projected_wastage = None
-
-                forecast_status = (
-                    "INSUFFICIENT_FORECAST_HORIZON"
-                )
 
             if projected_wastage is None:
 
