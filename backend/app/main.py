@@ -10,6 +10,7 @@ from backend.app.api.medicine_batches import router as batch_router
 from backend.app.api.stockout_alerts import router as stockout_alerts_router
 from backend.app.api.fefo import router as fefo_router
 from backend.app.api.expiry_management import router as expiry_management_router
+from backend.app.api.demand_forecasts import router as demand_forecasts_router
 from backend.app.api.stock_transfers import router as stock_transfers_router
 from backend.app.api.procurement import router as procurement_router
 from backend.app.api.purchase_orders import router as purchase_orders_router
@@ -31,6 +32,7 @@ app.include_router(batch_router)
 app.include_router(stockout_alerts_router)
 app.include_router(fefo_router)
 app.include_router(expiry_management_router)
+app.include_router(demand_forecasts_router)
 app.include_router(stock_transfers_router)
 app.include_router(procurement_router)
 app.include_router(purchase_orders_router)

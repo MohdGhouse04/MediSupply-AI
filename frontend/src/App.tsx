@@ -1,22 +1,27 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   Activity, AlertTriangle, ArrowDownRight, ArrowUpRight,
   Bell, Boxes, Building2, CalendarDays, ChevronDown,
   CircleHelp, Clock3, LayoutDashboard, Package,
-  Search, Settings, ShieldCheck, Truck, TrendingUp,
-  Zap
+  Search, Settings, ShieldCheck, Truck, TrendingUp, Zap
 } from 'lucide-react'
 import {
   CartesianGrid, Line, LineChart, ResponsiveContainer,
   Tooltip, XAxis, YAxis
 } from 'recharts'
 import type { LucideIcon } from 'lucide-react'
+import { fetchOverviewData } from './services/api'
+import type { OverviewData } from './services/api'
+import InventoryPage from './pages/InventoryPage'
+import StockoutAlertsPage from './pages/StockoutAlertsPage'
+import ExpiryManagementPage from './pages/ExpiryManagementPage'
+import DemandForecastPage from './pages/DemandForecastPage'
+import FacilitiesPage from './pages/FacilitiesPage'
+import TransfersPage from './pages/TransfersPage'
+import ProcurementPage from './pages/ProcurementPage'
 import './App.css'
 
-type NavItem = {
-  label: string
-  icon: LucideIcon
-}
+type NavItem = { label: string; icon: LucideIcon }
 
 const navigation: { heading: string; items: NavItem[] }[] = [
   {
@@ -54,29 +59,41 @@ const forecastData = [
   { day: 'Dec 02', actual: null, forecast: 66 },
 ]
 
-const alerts = [
-  {
-    medicine: 'Paracetamol 500mg',
-    facility: 'Facility 01',
-    risk: 'HIGH RISK',
-    detail: 'Predicted stockout within 7 days',
-  },
-  {
-    medicine: 'Amoxicillin 250mg',
-    facility: 'Facility 02',
-    risk: 'HIGH RISK',
-    detail: 'Low available inventory',
-  },
-  {
-    medicine: 'Cetirizine 10mg',
-    facility: 'Facility 01',
-    risk: 'LOW RISK',
-    detail: 'Monitor demand trend',
-  },
-]
-
 function App() {
   const [activePage, setActivePage] = useState('Overview')
+  const [overview, setOverview] = useState<OverviewData | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [apiError, setApiError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let isMounted = true
+
+    fetchOverviewData()
+      .then((data) => {
+        if (isMounted) setOverview(data)
+      })
+      .catch((error: unknown) => {
+        if (isMounted) {
+          setApiError(error instanceof Error ? error.message : 'Unable to load dashboard data.')
+        }
+      })
+      .finally(() => {
+        if (isMounted) setLoading(false)
+      })
+
+    return () => { isMounted = false }
+  }, [])
+
+  const totalUsableStock = overview?.inventory.reduce(
+    (total, medicine) => total + medicine.total_usable_stock, 0
+  ) ?? 0
+
+  const displayedAlerts = [...(overview?.stockout.alerts ?? [])]
+    .sort((a, b) => b.stockout_probability - a.stockout_probability)
+    .slice(0, 3)
+
+  const formatValue = (value: number | undefined) =>
+    value === undefined ? '—' : value.toLocaleString()
 
   return (
     <div className="app-shell">
@@ -110,7 +127,9 @@ function App() {
               >
                 <Icon size={18} strokeWidth={1.8} />
                 <span>{label}</span>
-                {label === 'Stockout Alerts' && <span className="nav-count">2</span>}
+                {label === 'Stockout Alerts' && (
+                  <span className="nav-count">{overview?.stockout.high_risk_count ?? '—'}</span>
+                )}
               </button>
             ))}
           </div>
@@ -148,60 +167,75 @@ function App() {
               <Bell size={19} /><i />
             </button>
             <div className="topbar-divider" />
-            <div className="topbar-date"><CalendarDays size={16} /> Nov 22, 2026</div>
+            <div className="topbar-date"><CalendarDays size={16} /> Nov 23, 2026</div>
           </div>
         </header>
 
-        <div className="page-content">
+        {activePage === "Inventory" && <InventoryPage />}
+        {activePage === "Stockout Alerts" && <StockoutAlertsPage />}
+        {activePage === "Expiry Management" && <ExpiryManagementPage />}
+        {activePage === "Demand Forecast" && <DemandForecastPage />}
+        {activePage === "Facilities" && <FacilitiesPage />}
+        {activePage === "Transfers" && <TransfersPage />}
+        {activePage === "Procurement" && <ProcurementPage />}
+        <div className="page-content" hidden={["Inventory", "Stockout Alerts", "Expiry Management", "Demand Forecast", "Facilities", "Transfers", "Procurement"].includes(activePage)}>
           <div className="page-heading">
             <div>
               <div className="eyebrow"><Zap size={13} /> INTELLIGENCE OVERVIEW</div>
               <h1>{activePage === 'Overview' ? 'Supply Chain Overview' : activePage}</h1>
               <p>Monitor inventory health, anticipate demand and make smarter supply decisions.</p>
             </div>
-            <button className="date-filter"><CalendarDays size={16} /> Last 30 days <ChevronDown size={15} /></button>
+            <button className="date-filter">
+              <CalendarDays size={16} /> Last 30 days <ChevronDown size={15} />
+            </button>
           </div>
 
-          <div className="preview-notice">
+          <div className={`preview-notice ${apiError ? 'api-error' : ''}`}>
             <Activity size={16} />
-            <span><strong>UI PREVIEW</strong> — Display values are illustrative. Live backend integration is the next step.</span>
+            {loading ? (
+              <span><strong>CONNECTING</strong> — Loading live backend data.</span>
+            ) : apiError ? (
+              <span><strong>API CONNECTION ISSUE</strong> — {apiError}</span>
+            ) : (
+              <span><strong>LIVE BACKEND DATA</strong> — Metrics are loaded from FastAPI. The demand chart remains illustrative.</span>
+            )}
           </div>
 
           <section className="kpi-grid">
             <KpiCard
               label="TOTAL INVENTORY"
-              value="—"
-              unit="Units across facilities"
+              value={loading ? '…' : apiError ? '—' : formatValue(totalUsableStock)}
+              unit="Usable units across facilities"
               icon={Package}
               color="blue"
-              trend="Live data pending"
+              trend="Combined usable stock"
               trendUp
             />
             <KpiCard
               label="STOCKOUT ALERTS"
-              value="8"
+              value={loading ? '…' : apiError ? '—' : formatValue(overview?.stockout.total_alerts)}
               unit="Current model-generated alerts"
               icon={AlertTriangle}
               color="orange"
-              trend="2 high risk"
+              trend={loading ? 'Loading risk levels' : `${overview?.stockout.high_risk_count ?? 0} high risk`}
               trendUp={false}
             />
             <KpiCard
               label="EXPIRY RISK"
-              value="—"
-              unit="Projected wastage units"
+              value={loading ? '…' : apiError ? '—' : formatValue(overview?.expiry.estimated_wastage_units)}
+              unit="Estimated wastage units"
               icon={Clock3}
               color="purple"
-              trend="Forecast-based estimate"
+              trend={overview ? `${overview.expiry.batches_with_insufficient_forecast} batches lack forecast coverage` : 'Forecast-based estimate'}
               trendUp
             />
             <KpiCard
               label="FACILITIES"
-              value="2"
-              unit="In the current dataset"
+              value={loading ? '…' : apiError ? '—' : formatValue(overview?.facilities.length)}
+              unit="Facilities in dataset"
               icon={Building2}
               color="green"
-              trend="Connected dataset"
+              trend="Backend facility records"
               trendUp
             />
           </section>
@@ -244,18 +278,31 @@ function App() {
               <div className="panel-header">
                 <div>
                   <h2>System Health</h2>
-                  <p>Application components</p>
+                  <p>API connectivity checks</p>
                 </div>
                 <ShieldCheck size={19} className="health-icon" />
               </div>
               <div className="health-list">
-                <HealthRow name="FastAPI Backend" status="Connected" />
-                <HealthRow name="PostgreSQL Database" status="Connected" />
-                <HealthRow name="Kafka Event Pipeline" status="Configured" />
-                <HealthRow name="ML Forecast Models" status="Available" />
+                <HealthRow
+                  name="FastAPI Backend"
+                  status={loading ? 'Checking' : overview?.health.status === 'healthy' ? 'Healthy' : 'Unavailable'}
+                />
+                <HealthRow
+                  name="Inventory API"
+                  status={loading ? 'Checking' : overview ? 'Connected' : 'Unavailable'}
+                />
+                <HealthRow
+                  name="Stockout Alert Data"
+                  status={loading ? 'Checking' : overview?.stockout.freshness_status ?? 'Unavailable'}
+                />
+                <HealthRow
+                  name="Expiry Forecast"
+                  status={loading ? 'Checking' : overview ? `${overview.expiry.forecast_horizon_days}-day horizon` : 'Unavailable'}
+                />
               </div>
               <div className="health-footer">
-                <span className="health-pulse" /> Project components configured
+                <span className="health-pulse" />
+                {loading ? 'Checking backend services' : apiError ? 'Some data could not be loaded' : 'Backend data successfully loaded'}
               </div>
             </div>
           </section>
@@ -265,23 +312,40 @@ function App() {
               <div className="panel-header">
                 <div>
                   <h2>Stockout Alerts</h2>
-                  <p>Sample alert display based on current project output</p>
+                  <p>Latest model-generated alerts from the backend</p>
                 </div>
-                <button className="text-action" onClick={() => setActivePage('Stockout Alerts')}>View all <ArrowUpRight size={14} /></button>
+                <button className="text-action" onClick={() => setActivePage('Stockout Alerts')}>
+                  View all <ArrowUpRight size={14} />
+                </button>
               </div>
               <div className="alert-list">
-                {alerts.map((alert) => (
-                  <div className="alert-row" key={alert.medicine}>
-                    <div className={`alert-symbol ${alert.risk === 'HIGH RISK' ? 'high' : 'low'}`}>
-                      <AlertTriangle size={17} />
-                    </div>
-                    <div className="alert-description">
-                      <strong>{alert.medicine}</strong>
-                      <span>{alert.facility} · {alert.detail}</span>
-                    </div>
-                    <span className={`risk-label ${alert.risk === 'HIGH RISK' ? 'risk-high' : 'risk-low'}`}>{alert.risk}</span>
+                {loading ? (
+                  <div className="alert-row">
+                    <div className="alert-description"><strong>Loading alerts…</strong></div>
                   </div>
-                ))}
+                ) : apiError ? (
+                  <div className="alert-row">
+                    <div className="alert-description"><strong>Alerts unavailable</strong><span>Check the backend connection</span></div>
+                  </div>
+                ) : displayedAlerts.map((alert) => {
+                  const isHighRisk = alert.risk_status === 'HIGH_RISK'
+                  return (
+                    <div className="alert-row" key={alert.alert_id}>
+                      <div className={`alert-symbol ${isHighRisk ? 'high' : 'low'}`}>
+                        <AlertTriangle size={17} />
+                      </div>
+                      <div className="alert-description">
+                        <strong>{alert.medicine} {alert.strength}</strong>
+                        <span>
+                          {alert.facility_name} · Stockout probability {(alert.stockout_probability * 100).toFixed(1)}%
+                        </span>
+                      </div>
+                      <span className={`risk-label ${isHighRisk ? 'risk-high' : 'risk-low'}`}>
+                        {alert.risk_status.replace('_', ' ')}
+                      </span>
+                    </div>
+                  )
+                })}
               </div>
             </div>
 
@@ -291,20 +355,32 @@ function App() {
                   <h2>Expiry Management</h2>
                   <p>FEFO recommendation summary</p>
                 </div>
-                <button className="text-action" onClick={() => setActivePage('Expiry Management')}>Details <ArrowUpRight size={14} /></button>
+                <button className="text-action" onClick={() => setActivePage('Expiry Management')}>
+                  Details <ArrowUpRight size={14} />
+                </button>
               </div>
               <div className="expiry-summary">
-                <div className="expiry-number">9</div>
+                <div className="expiry-number">
+                  {loading ? '…' : overview?.expiry.total_batches_reviewed ?? '—'}
+                </div>
                 <div>
                   <strong>Batches reviewed</strong>
                   <span>Latest API evaluation</span>
                 </div>
               </div>
               <div className="expiry-metrics">
-                <div><span>Insufficient forecast</span><strong>7</strong></div>
-                <div><span>Estimated wastage</span><strong>0 units</strong></div>
+                <div>
+                  <span>Insufficient forecast</span>
+                  <strong>{loading ? '…' : overview?.expiry.batches_with_insufficient_forecast ?? '—'}</strong>
+                </div>
+                <div>
+                  <span>Estimated wastage</span>
+                  <strong>{loading ? '…' : `${overview?.expiry.estimated_wastage_units ?? '—'} units`}</strong>
+                </div>
               </div>
-              <div className="expiry-note"><Clock3 size={14} /> Forecast estimates require ongoing monitoring.</div>
+              <div className="expiry-note">
+                <Clock3 size={14} /> Estimates apply only within the available forecast horizon.
+              </div>
             </div>
           </section>
 
