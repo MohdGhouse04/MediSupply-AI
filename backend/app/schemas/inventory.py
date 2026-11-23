@@ -5,6 +5,10 @@ from pydantic import BaseModel
 
 class InventoryResponse(BaseModel):
 
+    facility_id: int
+    batch_id: int
+    medicine_id: int
+
     facility_name: str
     generic_name: str
     strength: str

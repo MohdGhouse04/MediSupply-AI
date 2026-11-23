@@ -46,6 +46,9 @@ def get_inventory(db: Session = Depends(get_db)):
 
     statement = (
         select(
+            Facility.facility_id.label("facility_id"),
+            Inventory.batch_id.label("batch_id"),
+            Medicine.medicine_id.label("medicine_id"),
             Facility.facility_name.label("facility_name"),
             Medicine.generic_name.label("generic_name"),
             Medicine.strength.label("strength"),
@@ -88,6 +91,9 @@ def get_inventory_by_facility(
 
     statement = (
         select(
+            Facility.facility_id.label("facility_id"),
+            Inventory.batch_id.label("batch_id"),
+            Medicine.medicine_id.label("medicine_id"),
             Facility.facility_name.label("facility_name"),
             Medicine.generic_name.label("generic_name"),
             Medicine.strength.label("strength"),
@@ -140,6 +146,9 @@ def get_medicine_availability(
 
     statement = (
         select(
+            Facility.facility_id.label("facility_id"),
+            Inventory.batch_id.label("batch_id"),
+            Medicine.medicine_id.label("medicine_id"),
             Facility.facility_name.label("facility_name"),
             Medicine.generic_name.label("generic_name"),
             Medicine.strength.label("strength"),

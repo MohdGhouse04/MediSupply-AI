@@ -272,7 +272,9 @@ export default function ProcurementPage() {
               const medicine = String(rec.medicine_name ?? rec.generic_name ?? `Medicine ${rec.medicine_id ?? ''}`)
               const facility = String(rec.facility_name ?? rec.facility ?? `Facility ${rec.facility_id ?? ''}`)
               const urgency = String(rec.urgency ?? rec.urgency_level ?? rec.priority ?? 'REVIEW')
-              const qty = rec.provisional_procurement_quantity ?? rec.recommended_quantity ?? rec.procurement_quantity ?? rec.gross_procurement_quantity
+              const qty = rec.provisional_procurement_quantity_after_transfers
+                ?? rec.recommended_procurement_quantity
+                ?? rec.gross_procurement_gap
               return <tr key={String(rec.medicine_id ?? index) + '-' + String(rec.facility_id ?? '')}>
                 <td><strong>{medicine}</strong><small className="table-subtext">{String(rec.strength ?? '')}</small></td>
                 <td>{facility}</td>
