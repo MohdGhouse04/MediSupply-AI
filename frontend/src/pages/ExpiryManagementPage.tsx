@@ -244,7 +244,7 @@ export default function ExpiryManagementPage() {
                   const days = expiryDays(item.expires_on)
 
                   return (
-                    <tr key={item.batch_id}>
+                    <tr key={`${item.facility_id}-${item.batch_id}`}>
                       <td>
                         <div className="medicine-cell">
                           <strong>{item.generic_name}</strong>

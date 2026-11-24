@@ -254,6 +254,7 @@ function App() {
                 <span><i className="legend-dot forecast" /> Predicted demand</span>
               </div>
               <div className="chart-area">
+                {activePage === 'Overview' && (
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={forecastData} margin={{ top: 12, right: 10, left: -18, bottom: 0 }}>
                     <CartesianGrid stroke="#293449" strokeDasharray="3 5" vertical={false} />
@@ -267,6 +268,7 @@ function App() {
                     <Line type="monotone" dataKey="forecast" name="Forecast" stroke="#26C6A0" strokeWidth={2.5} strokeDasharray="6 5" dot={false} />
                   </LineChart>
                 </ResponsiveContainer>
+                )}
               </div>
               <div className="chart-footer">
                 <span>Preview visualization — not live model output</span>
