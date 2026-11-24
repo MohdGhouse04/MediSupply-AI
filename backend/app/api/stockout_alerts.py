@@ -358,17 +358,19 @@ def acknowledge_stockout_alert(
             ),
         }
 
-    alert.acknowledged = True
-    alert.acknowledged_by = request.acknowledged_by.strip()
-    alert.acknowledged_at = datetime.now(timezone.utc).replace(
-        tzinfo=None
-    )
+    acknowledged_by = request.acknowledged_by.strip()
 
-    if not alert.acknowledged_by:
+    if not acknowledged_by:
         raise HTTPException(
             status_code=422,
             detail="acknowledged_by cannot be blank.",
         )
+
+    alert.acknowledged = True
+    alert.acknowledged_by = acknowledged_by
+    alert.acknowledged_at = datetime.now(timezone.utc).replace(
+        tzinfo=None
+    )
 
     db.commit()
     db.refresh(alert)

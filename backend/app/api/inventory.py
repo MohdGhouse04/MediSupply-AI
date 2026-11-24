@@ -82,58 +82,6 @@ def get_inventory(db: Session = Depends(get_db)):
     return [dict(row) for row in results]
 
 
-# Get inventory for a specific facility
-@router.get("/{facility_id}", response_model=list[InventoryResponse])
-def get_inventory_by_facility(
-    facility_id: int,
-    db: Session = Depends(get_db)
-):
-
-    statement = (
-        select(
-            Facility.facility_id.label("facility_id"),
-            Inventory.batch_id.label("batch_id"),
-            Medicine.medicine_id.label("medicine_id"),
-            Facility.facility_name.label("facility_name"),
-            Medicine.generic_name.label("generic_name"),
-            Medicine.strength.label("strength"),
-            MedicineBatch.batch_number.label("batch_number"),
-            MedicineBatch.expires_on.label("expires_on"),
-            Inventory.quantity_on_hand.label("quantity_on_hand"),
-            Inventory.reserved_quantity.label("reserved_quantity"),
-            Inventory.damaged_quantity.label("damaged_quantity"),
-            calculate_usable_stock()
-        )
-        .join(
-            Facility,
-            Inventory.facility_id == Facility.facility_id
-        )
-        .join(
-            MedicineBatch,
-            Inventory.batch_id == MedicineBatch.batch_id
-        )
-        .join(
-            Medicine,
-            MedicineBatch.medicine_id == Medicine.medicine_id
-        )
-        .where(Facility.facility_id == facility_id)
-        .order_by(Medicine.generic_name)
-    )
-
-    results = db.execute(statement).mappings().all()
-
-    if not results:
-        facility_exists = db.get(Facility, facility_id)
-
-        if not facility_exists:
-            raise HTTPException(
-                status_code=404,
-                detail="Facility not found"
-            )
-
-    return [dict(row) for row in results]
-
-
 # Get medicine availability across all facilities
 @router.get(
     "/medicine/{medicine_id}",
@@ -420,3 +368,55 @@ def get_expiry_risk(
         },
         "records": expiry_records
     }
+
+
+# Get inventory for a specific facility
+@router.get("/{facility_id}", response_model=list[InventoryResponse])
+def get_inventory_by_facility(
+    facility_id: int,
+    db: Session = Depends(get_db)
+):
+
+    statement = (
+        select(
+            Facility.facility_id.label("facility_id"),
+            Inventory.batch_id.label("batch_id"),
+            Medicine.medicine_id.label("medicine_id"),
+            Facility.facility_name.label("facility_name"),
+            Medicine.generic_name.label("generic_name"),
+            Medicine.strength.label("strength"),
+            MedicineBatch.batch_number.label("batch_number"),
+            MedicineBatch.expires_on.label("expires_on"),
+            Inventory.quantity_on_hand.label("quantity_on_hand"),
+            Inventory.reserved_quantity.label("reserved_quantity"),
+            Inventory.damaged_quantity.label("damaged_quantity"),
+            calculate_usable_stock()
+        )
+        .join(
+            Facility,
+            Inventory.facility_id == Facility.facility_id
+        )
+        .join(
+            MedicineBatch,
+            Inventory.batch_id == MedicineBatch.batch_id
+        )
+        .join(
+            Medicine,
+            MedicineBatch.medicine_id == Medicine.medicine_id
+        )
+        .where(Facility.facility_id == facility_id)
+        .order_by(Medicine.generic_name)
+    )
+
+    results = db.execute(statement).mappings().all()
+
+    if not results:
+        facility_exists = db.get(Facility, facility_id)
+
+        if not facility_exists:
+            raise HTTPException(
+                status_code=404,
+                detail="Facility not found"
+            )
+
+    return [dict(row) for row in results]

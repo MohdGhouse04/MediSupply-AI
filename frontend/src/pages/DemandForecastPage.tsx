@@ -78,6 +78,7 @@ export default function DemandForecastPage() {
   const [horizon, setHorizon] = useState(7)
   const [facilityId, setFacilityId] = useState('ALL')
   const [medicineId, setMedicineId] = useState('ALL')
+  const [refreshKey, setRefreshKey] = useState(0)
   const [facilities, setFacilities] = useState<Facility[]>([])
   const [medicines, setMedicines] = useState<Medicine[]>([])
   const [data, setData] = useState<ForecastResponse | null>(null)
@@ -126,7 +127,7 @@ export default function DemandForecastPage() {
 
     loadForecast()
     return () => { active = false }
-  }, [horizon, facilityId, medicineId])
+  }, [horizon, facilityId, medicineId, refreshKey])
 
   const dailyData = useMemo(() => {
     const grouped = new Map<string, number>()
@@ -182,10 +183,7 @@ export default function DemandForecastPage() {
         </div>
         <button
           className="date-filter"
-          onClick={() => {
-            setHorizon((current) => current)
-            setFacilityId((current) => current)
-          }}
+          onClick={() => setRefreshKey((current) => current + 1)}
           disabled={loading}
         >
           <RefreshCw size={15} className={loading ? 'spin-icon' : ''} />
