@@ -1,3 +1,4 @@
+import { API_BASE } from '../services/apiBase'
 import { useEffect, useMemo, useState } from 'react'
 import {
   Search, RefreshCw, Package, AlertTriangle,
@@ -40,7 +41,7 @@ export default function InventoryPage() {
     setError(null)
 
     try {
-      const response = await fetch('/api/inventory/')
+      const response = await fetch(`${API_BASE}/inventory/`)
 
       if (!response.ok) {
         throw new Error(`Inventory API returned ${response.status}`)

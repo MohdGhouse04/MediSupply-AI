@@ -1,10 +1,11 @@
+import { API_BASE } from '../services/apiBase'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   ArrowRightLeft, Check, X, Truck, PackageCheck, RefreshCw,
   AlertTriangle, Plus, Search, Send, RotateCcw
 } from 'lucide-react'
 
-const API = '/api'
+const API = API_BASE
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`${API}${path}`, {
     ...options,
@@ -159,7 +160,7 @@ export default function TransfersPage() {
     } finally { setBusy(false) }
   }
 
-  async function useRecommendation(rec: Recommendation) {
+  async function createRecommendedTransfer(rec: Recommendation) {
     setBusy(true); setError(''); setNotice('')
     try {
       await request('/stock-transfers/', {
@@ -229,7 +230,7 @@ export default function TransfersPage() {
             <div className="transfer-route"><div><span>FROM</span><strong>{rec.source_facility}</strong></div><ArrowRightLeft size={17} /><div><span>TO</span><strong>{rec.destination_facility}</strong></div></div>
             <div className="recommendation-meta"><span>Batch {rec.batch_number}</span><span>Expiry {rec.batch_expiry}</span></div>
             <p>{rec.reason}</p>
-            <button className="secondary-action recommendation-button" disabled={busy} onClick={() => void useRecommendation(rec)}><Plus size={15} /> Create transfer request</button>
+            <button className="secondary-action recommendation-button" disabled={busy} onClick={() => void createRecommendedTransfer(rec)}><Plus size={15} /> Create transfer request</button>
           </article>)}</div>}
       </section>
 

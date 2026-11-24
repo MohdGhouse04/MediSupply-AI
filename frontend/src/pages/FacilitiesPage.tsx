@@ -1,3 +1,4 @@
+import { API_BASE } from '../services/apiBase'
 import { useEffect, useMemo, useState } from 'react'
 import {
   Building2, Package, Activity, RefreshCw, MapPin,
@@ -47,7 +48,7 @@ type FacilityMetrics = {
   transactionQuantity: number
 }
 
-const API = '/api'
+const API = API_BASE
 
 async function getJson<T>(path: string): Promise<T> {
   const response = await fetch(`${API}${path}`)

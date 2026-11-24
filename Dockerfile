@@ -10,6 +10,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY backend ./backend
+COPY data/processed/multi_horizon_forecasts.csv ./data/processed/
+COPY ml/data/stockout_alerts.csv ./ml/data/
 
 EXPOSE 8000
 

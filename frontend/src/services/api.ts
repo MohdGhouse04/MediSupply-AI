@@ -1,4 +1,4 @@
-const API_BASE = '/api'
+import { API_BASE } from './apiBase'
 
 async function getJson<T>(path: string): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {

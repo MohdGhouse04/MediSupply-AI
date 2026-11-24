@@ -1,3 +1,4 @@
+import { API_BASE } from '../services/apiBase'
 import { useEffect, useMemo, useState } from 'react'
 import {
   Activity, CalendarDays, RefreshCw, TrendingUp, Package,
@@ -51,7 +52,7 @@ type ForecastResponse = {
   forecasts: ForecastRecord[]
 }
 
-const API = '/api'
+const API = API_BASE
 
 async function getJson<T>(path: string): Promise<T> {
   const response = await fetch(`${API}${path}`, {

@@ -1,5 +1,7 @@
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from backend.app.core.config import settings
 
 from backend.app.api.inventory import router as inventory_router
 from backend.app.api.inventory_transactions import router as transaction_router
@@ -21,6 +23,21 @@ app = FastAPI(
     description="Intelligent Medicine Availability and Supply Chain Platform",
     version="1.0.0"
 )
+
+allowed_origins = [
+    origin.strip().rstrip("/")
+    for origin in settings.FRONTEND_ORIGINS.split(",")
+    if origin.strip()
+]
+
+if allowed_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allowed_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 # Register API routers
 app.include_router(inventory_router)

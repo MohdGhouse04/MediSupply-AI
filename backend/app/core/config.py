@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str
 
     KAFKA_BOOTSTRAP_SERVERS: str = "localhost:9092"
+    FRONTEND_ORIGINS: str = ""
 
     model_config = SettingsConfigDict(
         env_file=".env",

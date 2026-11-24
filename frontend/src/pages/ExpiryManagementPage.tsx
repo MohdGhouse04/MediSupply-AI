@@ -1,3 +1,4 @@
+import { API_BASE } from '../services/apiBase'
 import { useEffect, useMemo, useState } from 'react'
 import {
   AlertTriangle, CalendarClock, CheckCircle2,
@@ -66,7 +67,7 @@ export default function ExpiryManagementPage() {
     setError(null)
 
     try {
-      const response = await fetch('/api/expiry-management/recommendations', {
+      const response = await fetch(`${API_BASE}/expiry-management/recommendations`, {
         headers: { Accept: 'application/json' },
       })
 

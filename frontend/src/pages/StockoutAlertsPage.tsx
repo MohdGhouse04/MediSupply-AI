@@ -1,3 +1,4 @@
+import { API_BASE } from '../services/apiBase'
 import { useEffect, useMemo, useState } from 'react'
 import {
   AlertTriangle, CheckCircle2, Clock3, RefreshCw,
@@ -44,7 +45,7 @@ type AlertResponse = {
   alerts: StockoutAlert[]
 }
 
-const API = '/api'
+const API = API_BASE
 
 function formatDate(value: string | null) {
   if (!value) return '—'

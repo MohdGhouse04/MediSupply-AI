@@ -1,10 +1,11 @@
+import { API_BASE } from '../services/apiBase'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Boxes, RefreshCw, Plus, Search, AlertTriangle, Check,
   ClipboardList, Truck, PackageCheck, X
 } from 'lucide-react'
 
-const API = '/api'
+const API = API_BASE
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`${API}${path}`, {
     ...options,
